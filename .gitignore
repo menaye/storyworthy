@@ -1,0 +1,26 @@
+# Built application files & directories
+/build
+app/build
+captures/
+
+# Local configuration & credentials
+local.properties
+app/google-services.json
+*.jks
+*.keystore
+keystore.properties
+secrets.properties
+
+# Gradle & Kotlin build caches
+.gradle/
+.kotlin/
+
+# IDE files
+*.iml
+.idea/
+.artifacts/
+dependencies.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db

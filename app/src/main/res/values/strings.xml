@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Storyworthy</string>
+    <string name="home">Home</string>
+    <string name="quotes">Quotes</string>
+    <string name="stats">Stats</string>
+    <string name="profile">Profile</string>
+</resources>
