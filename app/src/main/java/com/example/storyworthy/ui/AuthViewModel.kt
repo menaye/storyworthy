@@ -1,5 +1,8 @@
 package com.example.storyworthy.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.storyworthy.Entry
@@ -23,6 +26,13 @@ class AuthViewModel : ViewModel() {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState
 
+    var currentErrorState by mutableStateOf<FirebaseErrorInfo?>(null)
+        private set
+
+    fun dismissError() {
+        currentErrorState = null
+    }
+
     val currentUser get() = repository.getCurrentUser()
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
@@ -40,6 +50,11 @@ class AuthViewModel : ViewModel() {
                 val result = repository.fetchUserEntries(firebaseUser.uid)
                 if (result.isSuccess) {
                     _entries.value = result.getOrDefault(emptyList())
+                } else {
+                    val error = result.exceptionOrNull()
+                    if (error != null) {
+                        currentErrorState = parseFirebaseError(error)
+                    }
                 }
             }
         }
@@ -55,6 +70,10 @@ class AuthViewModel : ViewModel() {
                     _authState.value = AuthState.Success(result.getOrThrow())
                 } else {
                     _authState.value = AuthState.Idle
+                    val error = result.exceptionOrNull()
+                    if (error != null) {
+                        currentErrorState = parseFirebaseError(error)
+                    }
                 }
             }
         }
@@ -108,7 +127,9 @@ class AuthViewModel : ViewModel() {
             if (result.isSuccess) {
                 _authState.value = AuthState.Success(result.getOrThrow())
             } else {
-                _authState.value = AuthState.Error(result.exceptionOrNull()?.message ?: "Signup failed")
+                val error = result.exceptionOrNull()
+                _authState.value = AuthState.Error(error?.message ?: "Signup failed")
+                currentErrorState = parseFirebaseError(error)
             }
         }
     }
@@ -124,7 +145,9 @@ class AuthViewModel : ViewModel() {
             if (result.isSuccess) {
                 _authState.value = AuthState.Success(result.getOrThrow())
             } else {
-                _authState.value = AuthState.Error(result.exceptionOrNull()?.message ?: "Login failed. Please try again.")
+                val error = result.exceptionOrNull()
+                _authState.value = AuthState.Error(error?.message ?: "Login failed. Please try again.")
+                currentErrorState = parseFirebaseError(error)
             }
         }
     }
@@ -155,6 +178,7 @@ class AuthViewModel : ViewModel() {
                 val result = repository.updateEntryStarStatus(firebaseUser.uid, entryId, newStarred)
                 if (result.isFailure) {
                     entry.isStarred = !newStarred
+                    currentErrorState = parseFirebaseError(result.exceptionOrNull())
                 } else {
                     loadUserEntries()
                 }
@@ -168,7 +192,10 @@ class AuthViewModel : ViewModel() {
         _entries.value = _entries.value.filter { it != entry && (entryId.isNullOrBlank() || it.id != entryId) }
         if (firebaseUser != null && !entryId.isNullOrBlank()) {
             viewModelScope.launch {
-                repository.deleteEntry(firebaseUser.uid, entryId)
+                val result = repository.deleteEntry(firebaseUser.uid, entryId)
+                if (result.isFailure) {
+                    currentErrorState = parseFirebaseError(result.exceptionOrNull())
+                }
                 loadUserEntries()
             }
         }

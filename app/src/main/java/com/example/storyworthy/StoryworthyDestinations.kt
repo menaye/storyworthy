@@ -54,6 +54,7 @@ import com.example.storyworthy.ui.AuthViewModel
 import com.example.storyworthy.ui.AuthState
 import com.example.storyworthy.ui.ConfirmEntry
 import com.example.storyworthy.ui.EntryDetailScreen
+import com.example.storyworthy.ui.FirebaseErrorPopup
 import com.example.storyworthy.ui.HomeScreen
 import com.example.storyworthy.ui.LoginScreen
 import com.example.storyworthy.ui.QuotesScreen
@@ -289,6 +290,14 @@ fun StoryworthyApp(authViewModel: AuthViewModel = viewModel()) {
         },
         floatingActionButtonPosition = FabPosition.Center
     ) { innerPadding ->
+        val errorState = authViewModel.currentErrorState
+        FirebaseErrorPopup(
+            showDialog = errorState != null,
+            errorReason = errorState?.reason,
+            errorSuggestion = errorState?.suggestion,
+            onDismiss = { authViewModel.dismissError() }
+        )
+
         NavHost(
             navController = navController,
             startDestination = startDestination,
@@ -335,8 +344,11 @@ fun StoryworthyApp(authViewModel: AuthViewModel = viewModel()) {
             }
             composable<RouteStats> {
                 val entries by authViewModel.entries.collectAsState()
+                val authState by authViewModel.authState.collectAsState()
+                val user = (authState as? AuthState.Success)?.user
                 StatsScreen(
                     entries = entries,
+                    userStats = user?.userStats,
                     onSearchClick = { navController.navigate(RouteSearch) }
                 )
             }

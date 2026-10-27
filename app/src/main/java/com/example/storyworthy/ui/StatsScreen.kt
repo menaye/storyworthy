@@ -32,6 +32,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.time.temporal.TemporalAdjusters.previousOrSame
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -47,7 +48,8 @@ val defaultMoodCategories = listOf(
     MoodCategory("sad", "😔", "Sad", Color(0xFFFF9800)),
     MoodCategory("neutral", "😐", "Neutral", Color(0xFF78909C)),
     MoodCategory("happy", "😊", "Happy", Color(0xFF42A5F5)),
-    MoodCategory("content", "😁", "Content", Color(0xFF26A69A))
+    MoodCategory("content", "😁", "Content", Color(0xFF26A69A)),
+    MoodCategory("other", "😶", "Other", Color(0xFF673AB7))
 )
 
 fun classifyEntryMood(moodStr: String?): MoodCategory {
@@ -59,7 +61,7 @@ fun classifyEntryMood(moodStr: String?): MoodCategory {
         lower.contains("neutral") || lower.contains("😐") -> defaultMoodCategories[2]
         lower.contains("happy") || lower.contains("😊") -> defaultMoodCategories[3]
         lower.contains("content") || lower.contains("😁") || lower.contains("😃") -> defaultMoodCategories[4]
-        else -> defaultMoodCategories[2]
+        else -> defaultMoodCategories[5]
     }
 }
 
@@ -76,14 +78,16 @@ fun calculateCurrentStreak(entries: List<Entry>): Int {
         }
     }.toSet()
 
-    if (dates.isEmpty()) return entries.size.coerceAtMost(1)
+    val today = LocalDate.now()
+    val yesterday = today.minusDays(1)
 
-    var streak = 0
-    var checkDate = LocalDate.now()
-    if (!dates.contains(checkDate)) {
-        checkDate = checkDate.minusDays(1)
+    var checkDate = when {
+        dates.contains(today) -> today
+        dates.contains(yesterday) -> yesterday
+        else -> return 0
     }
 
+    var streak = 0
     while (dates.contains(checkDate)) {
         streak++
         checkDate = checkDate.minusDays(1)
@@ -94,10 +98,28 @@ fun calculateCurrentStreak(entries: List<Entry>): Int {
 @Composable
 fun StatsScreen(
     entries: List<Entry>,
+    userStats: com.example.storyworthy.Stats? = null,
     onSearchClick: () -> Unit = {}
 ) {
-    val totalEntries = entries.size
-    val currentStreak = remember(entries) { calculateCurrentStreak(entries) }
+    val totalEntries = userStats?.numEntries?.takeIf { it > 0 } ?: entries.size
+    val currentStreak = remember(entries, userStats) {
+        val calculated = calculateCurrentStreak(entries)
+        if (userStats != null && !userStats.lastEntryDate.isNullOrBlank()) {
+            val lastDate = try { LocalDate.parse(userStats.lastEntryDate) } catch (_: Exception) { null }
+            val today = LocalDate.now()
+            if (lastDate != null && lastDate < today.minusDays(1)) {
+                0
+            } else {
+                userStats.currStreak
+            }
+        } else {
+            calculated
+        }
+    }
+    val maxStreak = remember(entries, userStats) {
+        if (userStats != null && userStats.longestStreak > 0) userStats.longestStreak
+        else maxOf(currentStreak, calculateMaxStreak(entries))
+    }
     var showTimelineView by rememberSaveable { mutableStateOf(false) }
 
     // Mood Breakdown Calculations
@@ -112,7 +134,7 @@ fun StatsScreen(
 
     // Weekly Activity Calculations
     val weeklyActivity = remember(entries) {
-        val startOfWeek = LocalDate.now().with(DayOfWeek.MONDAY)
+        val startOfWeek = LocalDate.now().with(previousOrSame(DayOfWeek.SUNDAY))
         val formatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)
 
         val days = (0..6).map { startOfWeek.plusDays(it.toLong()) }
@@ -234,12 +256,24 @@ fun StatsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Text(
-                        text = "$currentStreak days",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        Text(
+                            text = "$currentStreak days",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Max: $maxStreak",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }

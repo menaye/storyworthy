@@ -432,10 +432,6 @@ fun WriteEntryScreen(
         }
     }
 
-    var currentPath by remember { mutableStateOf<Path?>(null) }
-    var currentPoints by remember { mutableStateOf(listOf<Pair<Float, Float>>()) }
-    var currentPathTrigger by remember { mutableIntStateOf(0) }
-
     // Audio Recorder State
     val context = LocalContext.current
     val audioRecorderState = remember(context) { AudioRecorderState(context) }
@@ -561,6 +557,13 @@ fun WriteEntryScreen(
                         .collection("user-entries")
                         .add(newEntry)
                         .await()
+
+                    val userRef = firestore.collection("users").document(currentUser.uid)
+                    val userSnap = userRef.get().await()
+                    val userObj = userSnap.toObject(com.example.storyworthy.User::class.java)
+                    val currentStats = userObj?.userStats ?: com.example.storyworthy.Stats()
+                    val updatedStats = updateStatsForNewEntry(currentStats, LocalDate.now())
+                    userRef.update("userStats", updatedStats).await()
                 }
                 isUploading = false
                 DraftManager.clearDraft(context)
@@ -572,20 +575,9 @@ fun WriteEntryScreen(
                 showUploadErrorDialog = true
             } catch (exception: Exception) {
                 isUploading = false
-                val errorMsg = exception.message ?: "Unknown Firebase Error"
-                val errorCode = (exception as? FirebaseFirestoreException)?.code?.name ?: "UNKNOWN"
-
-                uploadErrorReason = "Firebase Error [$errorCode]: $errorMsg"
-                uploadErrorSuggestion = when {
-                    errorCode == "NOT_FOUND" || errorMsg.contains("does not exist", ignoreCase = true) || errorMsg.contains("database", ignoreCase = true) ->
-                        "The Cloud Firestore database has not been created in Firebase Console for project 'storyworthy-6af5c'. Visit https://console.cloud.google.com/datastore/setup?project=storyworthy-6af5c to initialize Cloud Firestore."
-                    errorCode == "PERMISSION_DENIED" || errorMsg.contains("permission", ignoreCase = true) ->
-                        "Your account lacks permission to write to Firebase Firestore. Verify database rules or sign in again."
-                    errorCode == "UNAVAILABLE" || errorMsg.contains("network", ignoreCase = true) ->
-                        "Network connection issue. Check your Wi-Fi or mobile data connection and try again."
-                    else ->
-                        "An error occurred while uploading your entry to the server. Check your connection or save as a draft."
-                }
+                val errorInfo = parseFirebaseError(exception)
+                uploadErrorReason = errorInfo.reason
+                uploadErrorSuggestion = errorInfo.suggestion
                 showUploadErrorDialog = true
             }
         }
@@ -974,71 +966,18 @@ fun WriteEntryScreen(
                         )
 
                         // Drawing Canvas Layer (overlaying the page)
-                        Canvas(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .then(
-                                    if (activeMode == EditMode.DRAWING) {
-                                        Modifier.pointerInput(isEraser, selectedDrawColor, selectedStrokeWidth) {
-                                            detectDragGestures(
-                                                onDragStart = { offset ->
-                                                    currentPoints = listOf(offset.x to offset.y)
-                                                    val newPath = Path().apply { moveTo(offset.x, offset.y) }
-                                                    currentPath = newPath
-                                                    currentPathTrigger++
-                                                },
-                                                onDrag = { change, _ ->
-                                                    currentPoints = currentPoints + (change.position.x to change.position.y)
-                                                    currentPath?.lineTo(change.position.x, change.position.y)
-                                                    currentPathTrigger++
-                                                },
-                                                onDragEnd = {
-                                                    currentPath?.let { path ->
-                                                        saveSnapshot()
-                                                        strokes.add(
-                                                            DrawingStroke(
-                                                                path = path,
-                                                                color = if (isEraser) PaperColor else selectedDrawColor,
-                                                                strokeWidth = if (isEraser) selectedStrokeWidth * 3f else selectedStrokeWidth,
-                                                                points = currentPoints
-                                                            )
-                                                        )
-                                                    }
-                                                    currentPath = null
-                                                }
-                                            )
-                                        }
-                                    } else Modifier
-                                )
-                        ) {
-                            // Suppress unused trigger warning for recomposition
-                            @Suppress("UNUSED_EXPRESSION") currentPathTrigger
-
-                            // Draw completed strokes
-                            for ((path, color, strokeWidth) in strokes) {
-                                drawPath(
-                                    path = path,
-                                    color = color,
-                                    style = Stroke(
-                                        width = strokeWidth,
-                                        cap = StrokeCap.Round,
-                                        join = StrokeJoin.Round
-                                    )
-                                )
+                        DrawingCanvasOverlay(
+                            activeMode = activeMode,
+                            isEraser = isEraser,
+                            selectedDrawColor = selectedDrawColor,
+                            selectedStrokeWidth = selectedStrokeWidth,
+                            strokes = strokes,
+                            paperColor = PaperColor,
+                            onStrokeComplete = { stroke ->
+                                saveSnapshot()
+                                strokes.add(stroke)
                             }
-                            // Draw in-progress active stroke
-                            currentPath?.let { path ->
-                                drawPath(
-                                    path = path,
-                                    color = if (isEraser) PaperColor else selectedDrawColor,
-                                    style = Stroke(
-                                        width = if (isEraser) selectedStrokeWidth * 3f else selectedStrokeWidth,
-                                        cap = StrokeCap.Round,
-                                        join = StrokeJoin.Round
-                                    )
-                                )
-                            }
-                        }
+                        )
                     }
                 }
             }
@@ -1148,83 +1087,12 @@ fun WriteEntryScreen(
         }
 
         // Upload Error Popup Dialog
-        if (showUploadErrorDialog) {
-            AlertDialog(
-                onDismissRequest = { showUploadErrorDialog = false },
-                icon = {
-                    Icon(
-                        imageVector = Icons.Default.CloudOff,
-                        contentDescription = "Upload Error",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(32.dp)
-                    )
-                },
-                title = {
-                    Text(
-                        text = "Unable to Upload Entry",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "The entry could not be saved.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(
-                                    text = "Reason:",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                                Text(
-                                    text = uploadErrorReason ?: "Unknown error",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            }
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(
-                                    text = uploadErrorSuggestion ?: "Check your connection and try again.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = { showUploadErrorDialog = false }) {
-                        Text("OK")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            performSaveDraft()
-                            showUploadErrorDialog = false
-                        }
-                    ) {
-                        Text("Save as Draft")
-                    }
-                }
-            )
-        }
+        FirebaseErrorPopup(
+            showDialog = showUploadErrorDialog,
+            errorReason = uploadErrorReason,
+            errorSuggestion = uploadErrorSuggestion,
+            onDismiss = { showUploadErrorDialog = false }
+        )
 
         // Loading Overlay while uploading
         if (isUploading) {
@@ -1534,5 +1402,85 @@ fun WriteEntryScreenPreview() {
         WriteEntryScreen(
             initialContent = "Today was a wonderful day filled with learning and creativity."
         )
+    }
+}
+
+@Composable
+fun DrawingCanvasOverlay(
+    activeMode: EditMode,
+    isEraser: Boolean,
+    selectedDrawColor: Color,
+    selectedStrokeWidth: Float,
+    strokes: List<DrawingStroke>,
+    paperColor: Color,
+    onStrokeComplete: (DrawingStroke) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var currentPath by remember { mutableStateOf<Path?>(null) }
+    var currentPoints by remember { mutableStateOf(listOf<Pair<Float, Float>>()) }
+    var drawTrigger by remember { mutableIntStateOf(0) }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .then(
+                if (activeMode == EditMode.DRAWING) {
+                    Modifier.pointerInput(isEraser, selectedDrawColor, selectedStrokeWidth) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                currentPoints = listOf(offset.x to offset.y)
+                                val newPath = Path().apply { moveTo(offset.x, offset.y) }
+                                currentPath = newPath
+                                drawTrigger++
+                            },
+                            onDrag = { change, _ ->
+                                currentPoints = currentPoints + (change.position.x to change.position.y)
+                                currentPath?.lineTo(change.position.x, change.position.y)
+                                drawTrigger++
+                            },
+                            onDragEnd = {
+                                currentPath?.let { path ->
+                                    val stroke = DrawingStroke(
+                                        path = path,
+                                        color = if (isEraser) paperColor else selectedDrawColor,
+                                        strokeWidth = if (isEraser) selectedStrokeWidth * 3f else selectedStrokeWidth,
+                                        points = currentPoints
+                                    )
+                                    onStrokeComplete(stroke)
+                                }
+                                currentPath = null
+                                currentPoints = emptyList()
+                            }
+                        )
+                    }
+                } else Modifier
+            )
+    ) {
+        @Suppress("UNUSED_EXPRESSION") drawTrigger
+
+        // Draw completed strokes
+        for ((path, color, strokeWidth) in strokes) {
+            drawPath(
+                path = path,
+                color = color,
+                style = Stroke(
+                    width = strokeWidth,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
+        // Draw active in-progress stroke
+        currentPath?.let { path ->
+            drawPath(
+                path = path,
+                color = if (isEraser) paperColor else selectedDrawColor,
+                style = Stroke(
+                    width = if (isEraser) selectedStrokeWidth * 3f else selectedStrokeWidth,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
     }
 }

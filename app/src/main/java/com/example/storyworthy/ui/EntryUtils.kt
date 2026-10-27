@@ -2,6 +2,9 @@ package com.example.storyworthy.ui
 
 import android.content.Context
 import com.example.storyworthy.Entry
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import android.graphics.ImageDecoder
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -428,4 +432,181 @@ fun getRandomContextTitle(entries: List<Entry>, selectedMood: String): String {
 
     val chosen = candidates.randomOrNull() ?: entries.randomOrNull()
     return chosen?.title?.ifBlank { "Untitled Entry" } ?: ""
+}
+
+fun updateStatsForNewEntry(stats: com.example.storyworthy.Stats, entryDate: LocalDate = LocalDate.now()): com.example.storyworthy.Stats {
+    val dateStr = entryDate.toString()
+    val lastDateStr = stats.lastEntryDate
+
+    val lastDate = if (!lastDateStr.isNullOrBlank()) {
+        try { LocalDate.parse(lastDateStr) } catch (_: Exception) { null }
+    } else null
+
+    when {
+        lastDate == null -> {
+            stats.currStreak = 1
+            stats.longestStreak = maxOf(stats.longestStreak, 1)
+        }
+        entryDate == lastDate -> {
+            // Same day entry — streak is unchanged
+        }
+        entryDate == lastDate.plusDays(1) -> {
+            stats.currStreak += 1
+            if (stats.currStreak > stats.longestStreak) {
+                stats.longestStreak = stats.currStreak
+            }
+        }
+        entryDate > lastDate.plusDays(1) -> {
+            // Gap day — reset current streak to 1
+            stats.currStreak = 1
+            if (stats.currStreak > stats.longestStreak) {
+                stats.longestStreak = stats.currStreak
+            }
+        }
+    }
+
+    stats.numEntries += 1
+    stats.lastEntryDate = dateStr
+    return stats
+}
+
+fun calculateMaxStreak(entries: List<Entry>): Int {
+    if (entries.isEmpty()) return 0
+
+    val formatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)
+    val sortedUniqueDates = entries.mapNotNull { entry ->
+        try {
+            entry.date?.let { LocalDate.parse(it, formatter) }
+        } catch (_: Exception) {
+            try { entry.date?.let { LocalDate.parse(it) } } catch (_: Exception) { null }
+        }
+    }.distinct().sorted()
+
+    if (sortedUniqueDates.isEmpty()) return 0
+
+    var maxStreak = 1
+    var currentStreak = 1
+
+    for (i in 1 until sortedUniqueDates.size) {
+        val prevDate = sortedUniqueDates[i - 1]
+        val currentDate = sortedUniqueDates[i]
+
+        if (currentDate == prevDate.plusDays(1)) {
+            currentStreak++
+        } else {
+            currentStreak = 1
+        }
+
+        if (currentStreak > maxStreak) {
+            maxStreak = currentStreak
+        }
+    }
+
+    return maxStreak
+}
+
+data class FirebaseErrorInfo(
+    val reason: String,
+    val suggestion: String
+)
+
+fun parseFirebaseError(exception: Throwable?): FirebaseErrorInfo {
+    if (exception == null) {
+        return FirebaseErrorInfo("Unknown Error", "An unexpected error occurred. Please try again.")
+    }
+
+    val errorMsg = exception.message ?: "Unknown Firebase Error"
+    val errorCode = (exception as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+        ?: (exception as? com.google.firebase.auth.FirebaseAuthException)?.errorCode
+        ?: "UNKNOWN"
+
+    val reason = "Firebase Error [$errorCode]: ${if (errorMsg.isBlank()) "Request failed" else errorMsg}"
+    val suggestion = when {
+        errorCode == "NOT_FOUND" || errorMsg.contains("does not exist", ignoreCase = true) || errorMsg.contains("database", ignoreCase = true) ->
+            "The Cloud Firestore database has not been created in Firebase Console for project 'storyworthy-6af5c'. Visit https://console.cloud.google.com/datastore/setup?project=storyworthy-6af5c to initialize Cloud Firestore."
+        errorCode == "PERMISSION_DENIED" || errorMsg.contains("permission", ignoreCase = true) ->
+            "Your account lacks permission to perform this action. Verify database rules or sign in again."
+        errorCode == "UNAVAILABLE" || errorMsg.contains("network", ignoreCase = true) || errorMsg.contains("connect", ignoreCase = true) ->
+            "Network connection issue. Check your Wi-Fi or mobile data connection and try again."
+        errorCode == "UNAUTHENTICATED" || errorMsg.contains("auth", ignoreCase = true) ->
+            "You are currently not signed in. Please sign in to your Storyworthy account and try again."
+        else ->
+            "An error occurred while updating records in the database. Please check your connection and try again."
+    }
+
+    return FirebaseErrorInfo(reason, suggestion)
+}
+
+@Composable
+fun FirebaseErrorPopup(
+    showDialog: Boolean,
+    errorReason: String?,
+    errorSuggestion: String?,
+    onDismiss: () -> Unit
+) {
+    if (showDialog && (!errorReason.isNullOrBlank() || !errorSuggestion.isNullOrBlank())) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Error",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Database Error",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (!errorReason.isNullOrBlank()) {
+                        Column {
+                            Text(
+                                text = "Reason:",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = errorReason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    if (!errorSuggestion.isNullOrBlank()) {
+                        Column {
+                            Text(
+                                text = "Suggestion:",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = errorSuggestion,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("OK", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
 }

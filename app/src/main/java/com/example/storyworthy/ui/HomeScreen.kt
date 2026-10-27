@@ -67,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.storyworthy.DailyEntries
 import com.example.storyworthy.Entry
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -103,13 +104,35 @@ fun HomeScreen(
     }
 
     val dailyEntriesList = remember(filteredEntries) {
-        filteredEntries.groupBy { it.date?.takeIf { d -> d.isNotBlank() } ?: "Recent Entries" }
-//    }
-//
-//    val dailyEntriesList = remember(entries) {
-//        entries.groupBy { it.date?.takeIf { d -> d.isNotBlank() } ?: "Recent Entries" }
-            .map { (date, list) -> DailyEntries(date = date, entries = list.reversed()) }
-            .reversed()
+        val dateFormatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)
+        val timeFormatter = DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US)
+        filteredEntries
+            .groupBy { it.date?.takeIf { d -> d.isNotBlank() } ?: "Recent Entries" }
+            .map { (dateStr, list) ->
+                val sortedEntriesForDay = list.sortedByDescending { entry ->
+                    try {
+                        LocalTime.parse(entry.time, timeFormatter)
+                    } catch (_: Exception) {
+                        try {
+                            LocalTime.parse(entry.time)
+                        } catch (_: Exception) {
+                            LocalTime.MIN
+                        }
+                    }
+                }
+                DailyEntries(date = dateStr, entries = sortedEntriesForDay)
+            }
+            .sortedByDescending { group ->
+                try {
+                    LocalDate.parse(group.date, dateFormatter)
+                } catch (_: Exception) {
+                    try {
+                        LocalDate.parse(group.date)
+                    } catch (_: Exception) {
+                        LocalDate.MIN
+                    }
+                }
+            }
     }
 
     Scaffold(
